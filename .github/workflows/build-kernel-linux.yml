@@ -47,47 +47,22 @@ jobs:
           KEY=$(python3 scripts/reuse-picasso-ram-data.py --tree "$UNIXNU_TREE" --cache-key)
           echo "digest=$KEY" >> "$GITHUB_OUTPUT"
 
-      - name: Install Linux host dependencies and identify the toolchain
-        id: toolchain_key
+      - name: Install Linux host dependencies
         run: |
           sudo python3 "$UNIXNU_TREE/scripts/linux/setup-toolchain.py" --host-only \
             2>&1 | tee out/picasso/logs/linux-host-tools.log
-          HOST_LLVM=$(llvm-config --version --bindir --libdir)
-          python3 - "$UNIXNU_TREE" "$UNIXNU_TOOLCHAIN" "$HOST_LLVM" <<'PY'
-          import hashlib, os, sys
-          from pathlib import Path
-          root = Path(sys.argv[1]) / 'scripts/linux'
-          digest = hashlib.sha256()
-          for value in sys.argv[2:]:
-              digest.update(value.encode() + b'\0')
-          for path in sorted(root.rglob('*')):
-              if path.is_file() and '__pycache__' not in path.parts:
-                  digest.update(path.relative_to(root).as_posix().encode() + b'\0')
-                  digest.update(path.read_bytes() + b'\0')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('digest=' + digest.hexdigest() + '\n')
-          PY
 
-      - name: Restore the installed Linux Mach-O toolchain
-        id: toolchain_cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.UNIXNU_TOOLCHAIN }}
-          key: unixnu-toolchain-v1-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ steps.toolchain_key.outputs.digest }}
-
-      - name: Install or validate the Linux Mach-O kernel toolchain
+      - name: Download and install the pinned Linux toolchain Release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          sudo python3 "$UNIXNU_TREE/scripts/linux/setup-toolchain.py" "$UNIXNU_TOOLCHAIN" --package-manager none \
+          python3 scripts/linux-toolchain-release.py download \
+            --pin configs/linux-toolchain-release.json --output "$RUNNER_TEMP/picasso-toolchain-release"
+          sudo python3 scripts/linux-toolchain-release.py install --tree "$UNIXNU_TREE" \
+            --bundle "$RUNNER_TEMP/picasso-toolchain-release" --pin configs/linux-toolchain-release.json \
             2>&1 | tee out/picasso/logs/linux-toolchain.log
           echo "$UNIXNU_LLVM_BIN" >> "$GITHUB_PATH"
           test -x "$UNIXNU_LLVM_BIN/llvm-objcopy"
-
-      - name: Save the installed toolchain before compiling the kernel
-        if: steps.toolchain_cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.UNIXNU_TOOLCHAIN }}
-          key: ${{ steps.toolchain_cache.outputs.cache-primary-key }}
 
       - name: Prepare authenticated stock touch firmware
         run: |
